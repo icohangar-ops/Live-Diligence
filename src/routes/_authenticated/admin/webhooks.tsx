@@ -3,8 +3,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useMemo, useEffect } from "react";
-import { listWebhookEvents, exportWebhookEvents } from "@/lib/admin.functions";
-import { CheckCircle2, XCircle, ShieldAlert, ChevronRight, RefreshCw, Search, X, ChevronLeft, Download } from "lucide-react";
+import { listWebhookEvents, exportWebhookEvents, exportWebhookEventsJSON } from "@/lib/admin.functions";
+import { CheckCircle2, XCircle, ShieldAlert, ChevronRight, RefreshCw, Search, X, ChevronLeft, Download, FileJson } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/admin/webhooks")({
   component: WebhookEventsPage,
@@ -16,7 +16,8 @@ function WebhookEventsPage() {
   const [verifiedFilter, setVerifiedFilter] = useState<"" | "true" | "false">("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [exporting, setExporting] = useState(false);
+  const [exportingCSV, setExportingCSV] = useState(false);
+  const [exportingJSON, setExportingJSON] = useState(false);
 
   const filters = useMemo(() => ({
     eventType: eventTypeFilter || undefined,
@@ -43,20 +44,31 @@ function WebhookEventsPage() {
     queryFn: () => fetchFn({ data: filters }),
     refetchInterval: 10_000,
   });
-  const exportFn = useServerFn(exportWebhookEvents);
+  const exportCsvFn = useServerFn(exportWebhookEvents);
+  const exportJsonFn = useServerFn(exportWebhookEventsJSON);
   const [openId, setOpenId] = useState<string | null>(null);
 
   const events = q.data?.events ?? [];
   const hasMore = q.data?.hasMore ?? false;
   const hasActiveFilters = eventTypeFilter || payloadStyleFilter || verifiedFilter;
 
-  async function handleExport() {
-    setExporting(true);
+  async function handleExportCSV() {
+    setExportingCSV(true);
     try {
-      const { events } = await exportFn({ data: exportFilters });
+      const { events } = await exportCsvFn({ data: exportFilters });
       downloadCSV(events, `webhook-events-${new Date().toISOString().slice(0, 10)}.csv`);
     } finally {
-      setExporting(false);
+      setExportingCSV(false);
+    }
+  }
+
+  async function handleExportJSON() {
+    setExportingJSON(true);
+    try {
+      const { events } = await exportJsonFn({ data: exportFilters });
+      downloadJSON(events, `webhook-events-${new Date().toISOString().slice(0, 10)}.json`);
+    } finally {
+      setExportingJSON(false);
     }
   }
 
@@ -72,12 +84,20 @@ function WebhookEventsPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={handleExport}
-            disabled={exporting}
+            onClick={handleExportJSON}
+            disabled={exportingJSON}
             className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
           >
-            <Download className={`h-4 w-4 ${exporting ? "animate-bounce" : ""}`} />
-            {exporting ? "Exporting…" : "Export CSV"}
+            <FileJson className={`h-4 w-4 ${exportingJSON ? "animate-bounce" : ""}`} />
+            {exportingJSON ? "Exporting…" : "Export JSON"}
+          </button>
+          <button
+            onClick={handleExportCSV}
+            disabled={exportingCSV}
+            className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
+          >
+            <Download className={`h-4 w-4 ${exportingCSV ? "animate-bounce" : ""}`} />
+            {exportingCSV ? "Exporting…" : "Export CSV"}
           </button>
           <button
             onClick={() => q.refetch()}
@@ -287,6 +307,16 @@ function downloadCSV(rows: any[], filename: string) {
     ),
   ];
   const blob = new Blob([csvRows.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadJSON(rows: any[], filename: string) {
+  const blob = new Blob([JSON.stringify(rows, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
