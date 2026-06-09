@@ -2,9 +2,9 @@ import { Fragment } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { listWebhookEvents } from "@/lib/admin.functions";
-import { CheckCircle2, XCircle, ShieldAlert, ChevronRight, RefreshCw, Search, X } from "lucide-react";
+import { CheckCircle2, XCircle, ShieldAlert, ChevronRight, RefreshCw, Search, X, ChevronLeft } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/admin/webhooks")({
   component: WebhookEventsPage,
@@ -14,12 +14,21 @@ function WebhookEventsPage() {
   const [eventTypeFilter, setEventTypeFilter] = useState("");
   const [payloadStyleFilter, setPayloadStyleFilter] = useState<"" | "snapshot" | "thin">("");
   const [verifiedFilter, setVerifiedFilter] = useState<"" | "true" | "false">("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   const filters = useMemo(() => ({
     eventType: eventTypeFilter || undefined,
     payloadStyle: payloadStyleFilter || undefined,
     verified: verifiedFilter === "" ? undefined : verifiedFilter === "true",
-  }), [eventTypeFilter, payloadStyleFilter, verifiedFilter]);
+    page,
+    pageSize,
+  }), [eventTypeFilter, payloadStyleFilter, verifiedFilter, page, pageSize]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [eventTypeFilter, payloadStyleFilter, verifiedFilter]);
 
   const fetchFn = useServerFn(listWebhookEvents);
   const q = useQuery({
@@ -30,6 +39,7 @@ function WebhookEventsPage() {
   const [openId, setOpenId] = useState<string | null>(null);
 
   const events = q.data?.events ?? [];
+  const hasMore = q.data?.hasMore ?? false;
   const hasActiveFilters = eventTypeFilter || payloadStyleFilter || verifiedFilter;
 
   return (
@@ -86,6 +96,15 @@ function WebhookEventsPage() {
           <option value="">All verification</option>
           <option value="true">Verified</option>
           <option value="false">Unverified</option>
+        </select>
+        <select
+          value={pageSize}
+          onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+          className="h-9 rounded-md border border-border bg-background px-3 text-sm focus:border-amber focus:outline-none"
+        >
+          <option value={25}>25 / page</option>
+          <option value={50}>50 / page</option>
+          <option value={100}>100 / page</option>
         </select>
         {hasActiveFilters && (
           <button
@@ -178,6 +197,28 @@ function WebhookEventsPage() {
             })}
           </tbody>
         </table>
+      </div>
+
+      <div className="mt-4 flex items-center justify-between">
+        <div className="text-sm text-muted-foreground">
+          Page {page} · {events.length} events
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setPage((p) => Math.max(1, p - 1)); setOpenId(null); }}
+            disabled={page <= 1}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-accent disabled:opacity-40"
+          >
+            <ChevronLeft className="h-4 w-4" /> Previous
+          </button>
+          <button
+            onClick={() => { setPage((p) => p + 1); setOpenId(null); }}
+            disabled={!hasMore}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-accent disabled:opacity-40"
+          >
+            Next <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <div className="mt-6 text-sm text-muted-foreground">
