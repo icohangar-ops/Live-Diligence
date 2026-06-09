@@ -1,0 +1,152 @@
+// Live Diligence — AWS Lambda runner.
+// Receives { reportId, query, isPro } and runs the agent loop against
+// SEC EDGAR + Exa, synthesizing the memo with AWS Bedrock (Claude 3.5).
+// Persists reports + events to DynamoDB.
+
+import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const bedrock = new BedrockRuntimeClient({});
+const sm = new SecretsManagerClient({});
+
+const REPORTS = process.env.REPORTS_TABLE!;
+const EVENTS = process.env.EVENTS_TABLE!;
+const MODEL_ID = process.env.BEDROCK_MODEL_ID || "anthropic.claude-3-5-sonnet-20241022-v2:0";
+
+let exaKeyCache: string | null = null;
+async function exaKey() {
+  if (exaKeyCache) return exaKeyCache;
+  const r = await sm.send(new GetSecretValueCommand({ SecretId: process.env.EXA_SECRET_ARN }));
+  exaKeyCache = r.SecretString || "";
+  return exaKeyCache;
+}
+
+async function emit(reportId: string, step: string, payload: any, status = "info") {
+  await ddb.send(new PutCommand({
+    TableName: EVENTS,
+    Item: { report_id: reportId, created_at: new Date().toISOString(), step, status, payload },
+  }));
+}
+
+async function patchReport(reportId: string, patch: Record<string, any>) {
+  const exprs: string[] = []; const names: Record<string, string> = {}; const values: Record<string, any> = {};
+  Object.entries(patch).forEach(([k, v], i) => {
+    exprs.push(`#k${i} = :v${i}`); names[`#k${i}`] = k; values[`:v${i}`] = v;
+  });
+  await ddb.send(new UpdateCommand({
+    TableName: REPORTS, Key: { id: reportId },
+    UpdateExpression: "SET " + exprs.join(", "),
+    ExpressionAttributeNames: names, ExpressionAttributeValues: values,
+  }));
+}
+
+async function bedrockChat(system: string, user: string, maxTokens = 2000) {
+  const cmd = new InvokeModelCommand({
+    modelId: MODEL_ID,
+    contentType: "application/json",
+    body: JSON.stringify({
+      anthropic_version: "bedrock-2023-05-31",
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: user }],
+    }),
+  });
+  const res = await bedrock.send(cmd);
+  const text = new TextDecoder().decode(res.body);
+  const j = JSON.parse(text);
+  return j.content?.[0]?.text || "";
+}
+
+async function tickerToCik(ticker: string) {
+  const res = await fetch("https://www.sec.gov/files/company_tickers.json", {
+    headers: { "user-agent": "Live Diligence AWS runner (contact@livediligence.app)" },
+  });
+  const map = await res.json();
+  for (const k in map) if (map[k].ticker?.toUpperCase() === ticker.toUpperCase()) return String(map[k].cik_str).padStart(10, "0");
+  return null;
+}
+
+async function recentFilings(ticker: string) {
+  const cik = await tickerToCik(ticker); if (!cik) return [];
+  const r = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, { headers: { "user-agent": "Live Diligence AWS runner" } });
+  const j = await r.json();
+  const f = j.filings?.recent; if (!f) return [];
+  const want = new Set(["10-K", "10-Q", "8-K"]); const out: any[] = []; const seen: Record<string, number> = {};
+  for (let i = 0; i < (f.form?.length || 0); i++) {
+    const form = f.form[i]; if (!want.has(form)) continue;
+    if ((seen[form] || 0) >= (form === "8-K" ? 3 : 1)) continue;
+    seen[form] = (seen[form] || 0) + 1;
+    const acc = (f.accessionNumber[i] as string).replace(/-/g, "");
+    out.push({ form, filed: f.filingDate[i], url: `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${acc}/${f.primaryDocument[i]}` });
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
+async function exaSearch(query: string, n = 5) {
+  const key = await exaKey();
+  const r = await fetch("https://api.exa.ai/search", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": key },
+    body: JSON.stringify({ query, numResults: n, type: "neural", contents: { text: { maxCharacters: 1200 } } }),
+  });
+  const j = await r.json();
+  return (j.results || []).map((x: any) => ({ title: x.title, url: x.url, text: x.text || "" }));
+}
+
+export const handler = async (event: any) => {
+  const body = JSON.parse(event.body || "{}");
+  const reportId: string = body.reportId;
+  const query: string = body.query;
+  if (!reportId || !query) return { statusCode: 400, body: "missing fields" };
+
+  try {
+    await patchReport(reportId, { status: "running", query, updated_at: new Date().toISOString() });
+    await emit(reportId, "plan", { msg: "Planning..." }, "running");
+
+    const planRaw = await bedrockChat(
+      "You output STRICT JSON. Given an investing query, return {ticker, company_name, sub_questions[4], web_queries[4]}.",
+      query, 600,
+    );
+    const plan = JSON.parse(planRaw.match(/\{[\s\S]*\}/)?.[0] || "{}");
+    const ticker: string | null = plan.ticker ? String(plan.ticker).toUpperCase() : null;
+    await patchReport(reportId, { ticker, company_name: plan.company_name });
+    await emit(reportId, "plan", plan, "done");
+
+    let filings: any[] = [];
+    if (ticker) { filings = await recentFilings(ticker); await emit(reportId, "edgar", { count: filings.length, filings }, "done"); }
+
+    const web: any[] = [];
+    for (const q of (plan.web_queries || [query]).slice(0, 3)) web.push(...(await exaSearch(q, 4)));
+    const seen = new Set<string>(); const dedup = web.filter((r) => seen.has(r.url) ? false : (seen.add(r.url), true)).slice(0, 12);
+    await emit(reportId, "exa", { count: dedup.length, sources: dedup.map((r) => ({ title: r.title, url: r.url })) }, "done");
+
+    await emit(reportId, "synth", { msg: "Synthesizing with Bedrock Claude 3.5..." }, "running");
+    const memo = await bedrockChat(
+      `You are a senior equity-research analyst writing a Markdown diligence memo with sections: ## Executive Summary / ## Thesis / ## Financials & KPIs / ## Risks / ## Catalysts / ## Sources. Inline-cite web sources [n].`,
+      [
+        `Query: ${query}`,
+        `Company: ${plan.company_name} (${ticker ?? "N/A"})`,
+        `Filings:\n${filings.map((f) => `- ${f.form} ${f.filed} ${f.url}`).join("\n")}`,
+        `Web:\n${dedup.map((r, i) => `[${i + 1}] ${r.title} ${r.url}\n${(r.text || "").slice(0, 600)}`).join("\n\n")}`,
+      ].join("\n\n"),
+      2400,
+    );
+
+    const sources = [
+      ...filings.map((f) => ({ kind: "sec", title: `${f.form} · ${f.filed}`, url: f.url })),
+      ...dedup.map((r) => ({ kind: "web", title: r.title, url: r.url })),
+    ];
+
+    await patchReport(reportId, { status: "done", memo_md: memo, sources, updated_at: new Date().toISOString() });
+    await emit(reportId, "done", { tokens: memo.length, sources: sources.length }, "done");
+    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+  } catch (err: any) {
+    await patchReport(reportId, { status: "error", error: String(err?.message || err) });
+    await emit(reportId, "error", { message: String(err?.message || err) }, "error");
+    return { statusCode: 200, body: JSON.stringify({ ok: false, error: String(err?.message || err) }) };
+  }
+};
