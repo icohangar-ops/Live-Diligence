@@ -2,24 +2,35 @@ import { Fragment } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { listWebhookEvents } from "@/lib/admin.functions";
-import { CheckCircle2, XCircle, ShieldAlert, ChevronRight, RefreshCw } from "lucide-react";
+import { CheckCircle2, XCircle, ShieldAlert, ChevronRight, RefreshCw, Search, X } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/admin/webhooks")({
   component: WebhookEventsPage,
 });
 
 function WebhookEventsPage() {
+  const [eventTypeFilter, setEventTypeFilter] = useState("");
+  const [payloadStyleFilter, setPayloadStyleFilter] = useState<"" | "snapshot" | "thin">("");
+  const [verifiedFilter, setVerifiedFilter] = useState<"" | "true" | "false">("");
+
+  const filters = useMemo(() => ({
+    eventType: eventTypeFilter || undefined,
+    payloadStyle: payloadStyleFilter || undefined,
+    verified: verifiedFilter === "" ? undefined : verifiedFilter === "true",
+  }), [eventTypeFilter, payloadStyleFilter, verifiedFilter]);
+
   const fetchFn = useServerFn(listWebhookEvents);
   const q = useQuery({
-    queryKey: ["admin", "webhook-events"],
-    queryFn: () => fetchFn(),
+    queryKey: ["admin", "webhook-events", filters],
+    queryFn: () => fetchFn({ data: filters }),
     refetchInterval: 10_000,
   });
   const [openId, setOpenId] = useState<string | null>(null);
 
   const events = q.data?.events ?? [];
+  const hasActiveFilters = eventTypeFilter || payloadStyleFilter || verifiedFilter;
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-10">
@@ -47,6 +58,49 @@ function WebhookEventsPage() {
         </div>
       )}
 
+      <div className="mt-6 flex flex-wrap items-center gap-3">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Filter by event type…"
+            value={eventTypeFilter}
+            onChange={(e) => setEventTypeFilter(e.target.value)}
+            className="h-9 rounded-md border border-border bg-background pl-9 pr-3 text-sm focus:border-amber focus:outline-none"
+          />
+        </div>
+        <select
+          value={payloadStyleFilter}
+          onChange={(e) => setPayloadStyleFilter(e.target.value as any)}
+          className="h-9 rounded-md border border-border bg-background px-3 text-sm focus:border-amber focus:outline-none"
+        >
+          <option value="">All payload styles</option>
+          <option value="snapshot">Snapshot</option>
+          <option value="thin">Thin</option>
+        </select>
+        <select
+          value={verifiedFilter}
+          onChange={(e) => setVerifiedFilter(e.target.value as any)}
+          className="h-9 rounded-md border border-border bg-background px-3 text-sm focus:border-amber focus:outline-none"
+        >
+          <option value="">All verification</option>
+          <option value="true">Verified</option>
+          <option value="false">Unverified</option>
+        </select>
+        {hasActiveFilters && (
+          <button
+            onClick={() => {
+              setEventTypeFilter("");
+              setPayloadStyleFilter("");
+              setVerifiedFilter("");
+            }}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-3 py-2 text-sm hover:bg-accent"
+          >
+            <X className="h-4 w-4" /> Clear
+          </button>
+        )}
+      </div>
+
       <div className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
         <table className="w-full text-sm">
           <thead className="border-b border-border bg-muted/30 text-left font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -63,7 +117,7 @@ function WebhookEventsPage() {
             {events.length === 0 && !q.isLoading && (
               <tr>
                 <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">
-                  No webhook events received yet.
+                  No webhook events match your filters.
                 </td>
               </tr>
             )}
