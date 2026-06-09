@@ -70,9 +70,8 @@ function WebhookEventsPage() {
             {events.map((e: any) => {
               const isOpen = openId === e.id;
               return (
-                <>
+                <Fragment key={e.id}>
                   <tr
-                    key={e.id}
                     onClick={() => setOpenId(isOpen ? null : e.id)}
                     className="cursor-pointer border-t border-border hover:bg-accent/40"
                   >
@@ -112,7 +111,7 @@ function WebhookEventsPage() {
                     </td>
                   </tr>
                   {isOpen && (
-                    <tr key={`${e.id}-detail`} className="border-t border-border bg-muted/20">
+                    <tr className="border-t border-border bg-muted/20">
                       <td colSpan={6} className="px-4 py-3">
                         <pre className="max-h-96 overflow-auto rounded-md bg-background p-3 font-mono text-[11px] leading-relaxed">
                           {JSON.stringify(e.payload, null, 2)}
@@ -120,7 +119,7 @@ function WebhookEventsPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               );
             })}
           </tbody>
