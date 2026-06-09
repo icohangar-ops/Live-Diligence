@@ -30,16 +30,12 @@ export const startReport = createServerFn({ method: "POST" })
 
     // Bump usage (admin via service role; user can't write to usage)
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    await supabaseAdmin.from("usage").upsert(
-      { user_id: userId, month, reports_run: (await supabaseAdmin.from("usage").select("reports_run").eq("user_id", userId).eq("month", month).maybeSingle()).data?.reports_run ?? 0 },
-      { onConflict: "user_id,month" },
-    );
-    await supabaseAdmin.rpc("noop_does_not_exist").then(() => null, () => null); // ignore
-    // Increment safely
+    const { data: existingUsage } = await supabaseAdmin
+      .from("usage").select("reports_run").eq("user_id", userId).eq("month", month).maybeSingle();
     await supabaseAdmin
       .from("usage")
       .upsert(
-        { user_id: userId, month, reports_run: ((await supabaseAdmin.from("usage").select("reports_run").eq("user_id", userId).eq("month", month).maybeSingle()).data?.reports_run ?? 0) + 1 },
+        { user_id: userId, month, reports_run: (existingUsage?.reports_run ?? 0) + 1 },
         { onConflict: "user_id,month" },
       );
 

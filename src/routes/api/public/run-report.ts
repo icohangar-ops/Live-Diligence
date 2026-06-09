@@ -38,11 +38,11 @@ export const Route = createFileRoute("/api/public/run-report")({
             isPro,
             emit: async (step, payload, status = "info") => {
               await supabaseAdmin.from("report_events").insert({
-                report_id: report.id, step, status, payload,
+                report_id: report.id, step, status, payload: payload as any,
               });
             },
             setReport: async (patch) => {
-              await supabaseAdmin.from("reports").update(patch).eq("id", report.id);
+              await supabaseAdmin.from("reports").update(patch as any).eq("id", report.id);
             },
           });
         } catch (err: any) {
