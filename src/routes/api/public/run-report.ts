@@ -4,7 +4,11 @@ export const Route = createFileRoute("/api/public/run-report")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const expected = process.env.AGENT_RUNNER_SECRET || "dev-secret";
+        const expected = process.env.AGENT_RUNNER_SECRET;
+        if (!expected) {
+          console.error("AGENT_RUNNER_SECRET is not set; rejecting run-report request.");
+          return new Response("server misconfigured", { status: 500 });
+        }
         const got = request.headers.get("x-runner-secret");
         if (got !== expected) return new Response("forbidden", { status: 403 });
 

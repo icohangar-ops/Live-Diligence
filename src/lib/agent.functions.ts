@@ -41,7 +41,8 @@ export const startReport = createServerFn({ method: "POST" })
 
     // Fire-and-forget kick to the public runner route. We don't await.
     const origin = process.env.PUBLIC_APP_URL || "";
-    const runnerSecret = process.env.AGENT_RUNNER_SECRET || "dev-secret";
+    const runnerSecret = process.env.AGENT_RUNNER_SECRET;
+    if (!runnerSecret) throw new Error("AGENT_RUNNER_SECRET is not set");
     const url = `${origin}/api/public/run-report`;
     // Best-effort; if origin not set, the route is fetched by host header from incoming request.
     try {

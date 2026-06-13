@@ -23,16 +23,19 @@ export const Route = createFileRoute("/api/public/stripe-webhook")({
     handlers: {
       POST: async ({ request }) => {
         const secret = process.env.STRIPE_WEBHOOK_SECRET;
+        if (!secret) {
+          console.warn(
+            "STRIPE_WEBHOOK_SECRET is not set; rejecting webhook. Refusing to process unauthenticated Stripe events.",
+          );
+          return new Response("webhook not configured", { status: 503 });
+        }
         const raw = await request.text();
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-        let verified = false;
         let evt: any = null;
         let parseError: string | null = null;
 
-        if (secret) {
-          verified = await verify(raw, request.headers.get("stripe-signature"), secret);
-        }
+        const verified = await verify(raw, request.headers.get("stripe-signature"), secret);
 
         try {
           evt = raw ? JSON.parse(raw) : null;
@@ -53,7 +56,7 @@ export const Route = createFileRoute("/api/public/stripe-webhook")({
           payload: evt ?? { raw: raw.slice(0, 2000) },
         };
 
-        if (secret && !verified) {
+        if (!verified) {
           await supabaseAdmin.from("webhook_events").insert({
             ...logBase,
             status: "rejected",
