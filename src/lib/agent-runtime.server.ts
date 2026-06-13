@@ -1,6 +1,13 @@
 // Server-only agent runtime helpers. Imported only inside server route handlers.
 // Uses LOVABLE_API_KEY (auto-provisioned) + EXA_API_KEY (user-provided).
 
+import { safeFetch } from "./resilience/index.js";
+
+// Per-call timeout budgets (audit: external calls must not hang indefinitely).
+const LLM_TIMEOUT_MS = 30_000;
+const EXA_TIMEOUT_MS = 10_000;
+const EDGAR_TIMEOUT_MS = 10_000;
+
 const SEC_UA = "Live Diligence research-agent (contact@livediligence.app)";
 const LOVABLE_AI_BASE = "https://ai.gateway.lovable.dev/v1";
 
@@ -22,10 +29,11 @@ async function llm(model: string, messages: { role: string; content: string }[],
   const body: any = { model, messages, max_tokens: opts.maxTokens ?? 2048 };
   if (opts.json) body.response_format = { type: "json_object" };
 
-  const res = await fetch(`${LOVABLE_AI_BASE}/chat/completions`, {
+  const res = await safeFetch(`${LOVABLE_AI_BASE}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", "Lovable-API-Key": key },
     body: JSON.stringify(body),
+    timeoutMs: LLM_TIMEOUT_MS,
   });
   if (!res.ok) {
     const t = await res.text();
@@ -68,7 +76,7 @@ async function plan(query: string): Promise<Plan> {
 interface Filing { form: string; filed: string; accession: string; url: string; primary_doc: string }
 
 async function tickerToCik(ticker: string): Promise<string | null> {
-  const res = await fetch("https://www.sec.gov/files/company_tickers.json", { headers: { "user-agent": SEC_UA } });
+  const res = await safeFetch("https://www.sec.gov/files/company_tickers.json", { headers: { "user-agent": SEC_UA }, timeoutMs: EDGAR_TIMEOUT_MS });
   if (!res.ok) return null;
   const map = await res.json() as Record<string, { cik_str: number; ticker: string; title: string }>;
   for (const k in map) if (map[k].ticker?.toUpperCase() === ticker.toUpperCase()) return String(map[k].cik_str).padStart(10, "0");
@@ -78,7 +86,7 @@ async function tickerToCik(ticker: string): Promise<string | null> {
 async function recentFilings(ticker: string): Promise<Filing[]> {
   const cik = await tickerToCik(ticker);
   if (!cik) return [];
-  const res = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, { headers: { "user-agent": SEC_UA } });
+  const res = await safeFetch(`https://data.sec.gov/submissions/CIK${cik}.json`, { headers: { "user-agent": SEC_UA }, timeoutMs: EDGAR_TIMEOUT_MS });
   if (!res.ok) return [];
   const j = await res.json();
   const f = j.filings?.recent;
@@ -111,7 +119,7 @@ interface ExaResult { title: string; url: string; text?: string; published_date?
 async function exaSearch(query: string, n = 6): Promise<ExaResult[]> {
   const key = process.env.EXA_API_KEY;
   if (!key) return [];
-  const res = await fetch("https://api.exa.ai/search", {
+  const res = await safeFetch("https://api.exa.ai/search", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": key },
     body: JSON.stringify({
@@ -121,6 +129,7 @@ async function exaSearch(query: string, n = 6): Promise<ExaResult[]> {
       useAutoprompt: true,
       contents: { text: { maxCharacters: 1200 }, livecrawl: "fallback" },
     }),
+    timeoutMs: EXA_TIMEOUT_MS,
   });
   if (!res.ok) return [];
   const j = await res.json();

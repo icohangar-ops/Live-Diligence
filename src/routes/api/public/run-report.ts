@@ -20,6 +20,17 @@ export const Route = createFileRoute("/api/public/run-report")({
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
         const { runAgent } = await import("@/lib/agent-runtime.server");
 
+        // Status-transition guard: a worker can die mid-run and leave a report
+        // stuck in 'running' forever. Reclaim any 'running' report whose last
+        // update is older than 5 minutes back to 'error' so it stops blocking.
+        const STALE_RUNNING_MS = 5 * 60 * 1000;
+        const staleBefore = new Date(Date.now() - STALE_RUNNING_MS).toISOString();
+        await supabaseAdmin
+          .from("reports")
+          .update({ status: "error", error: "run timed out (stuck in running > 5m)" })
+          .eq("status", "running")
+          .lt("updated_at", staleBefore);
+
         const { data: report } = await supabaseAdmin
           .from("reports")
           .select("id, user_id, query, status")
