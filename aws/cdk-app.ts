@@ -43,6 +43,7 @@ export class LiveDiligenceStack extends Stack {
         EXA_SECRET_ARN: exaSecret.secretArn,
         STRIPE_SECRET_ARN: stripeSecret.secretArn,
         BEDROCK_MODEL_ID: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        AIRBYTE_WORKSPACE: process.env.AIRBYTE_WORKSPACE || "default",
       },
     });
 

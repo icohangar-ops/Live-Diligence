@@ -1,5 +1,8 @@
 // Server-only agent runtime helpers. Imported only inside server route handlers.
-// Uses LOVABLE_API_KEY (auto-provisioned) + EXA_API_KEY (user-provided).
+// Uses LOVABLE_API_KEY (auto-provisioned). Exa via Airbyte CLI (EXA connector in app.airbyte.ai).
+// SEC EDGAR stays direct (no Airbyte connector).
+
+import { exaSearch, type ExaResult } from "@/lib/exa.server";
 
 const SEC_UA = "Live Diligence research-agent (contact@livediligence.app)";
 const LOVABLE_AI_BASE = "https://ai.gateway.lovable.dev/v1";
@@ -104,34 +107,6 @@ async function recentFilings(ticker: string): Promise<Filing[]> {
   return out;
 }
 
-// ---------- Exa ----------
-
-interface ExaResult { title: string; url: string; text?: string; published_date?: string }
-
-async function exaSearch(query: string, n = 6): Promise<ExaResult[]> {
-  const key = process.env.EXA_API_KEY;
-  if (!key) return [];
-  const res = await fetch("https://api.exa.ai/search", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": key },
-    body: JSON.stringify({
-      query,
-      numResults: n,
-      type: "neural",
-      useAutoprompt: true,
-      contents: { text: { maxCharacters: 1200 }, livecrawl: "fallback" },
-    }),
-  });
-  if (!res.ok) return [];
-  const j = await res.json();
-  return (j.results || []).map((r: any) => ({
-    title: r.title || r.url,
-    url: r.url,
-    text: r.text || "",
-    published_date: r.publishedDate,
-  }));
-}
-
 // ---------- Synthesizer ----------
 
 async function synthesize(args: {
@@ -192,7 +167,7 @@ export async function runAgent(ctx: RunContext) {
     await ctx.emit("edgar", { msg: "No ticker resolved — skipping EDGAR." }, "skipped");
   }
 
-  await ctx.emit("exa", { msg: "Scanning live web via Exa..." }, "running");
+  await ctx.emit("exa", { msg: "Scanning live web via Exa (Airbyte CLI)..." }, "running");
   const webResults: ExaResult[] = [];
   for (const q of p.web_queries.slice(0, 3)) {
     const r = await exaSearch(q, 4);

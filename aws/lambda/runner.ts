@@ -1,12 +1,13 @@
 // Live Diligence — AWS Lambda runner.
 // Receives { reportId, query, isPro } and runs the agent loop against
-// SEC EDGAR + Exa, synthesizing the memo with AWS Bedrock (Claude 3.5).
+// SEC EDGAR (direct) + Exa (Airbyte CLI), synthesizing the memo with AWS Bedrock (Claude 3.5).
 // Persists reports + events to DynamoDB.
 
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import { exaSearch } from "../../src/lib/exa.server";
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const bedrock = new BedrockRuntimeClient({});
@@ -16,12 +17,12 @@ const REPORTS = process.env.REPORTS_TABLE!;
 const EVENTS = process.env.EVENTS_TABLE!;
 const MODEL_ID = process.env.BEDROCK_MODEL_ID || "anthropic.claude-3-5-sonnet-20241022-v2:0";
 
-let exaKeyCache: string | null = null;
-async function exaKey() {
-  if (exaKeyCache) return exaKeyCache;
-  const r = await sm.send(new GetSecretValueCommand({ SecretId: process.env.EXA_SECRET_ARN }));
-  exaKeyCache = r.SecretString || "";
-  return exaKeyCache;
+let exaKeyBootstrapped = false;
+async function bootstrapExaFallback() {
+  if (exaKeyBootstrapped || process.env.EXA_API_KEY || !process.env.EXA_SECRET_ARN) return;
+  const secret = await sm.send(new GetSecretValueCommand({ SecretId: process.env.EXA_SECRET_ARN }));
+  process.env.EXA_API_KEY = secret.SecretString || "";
+  exaKeyBootstrapped = true;
 }
 
 async function emit(reportId: string, step: string, payload: any, status = "info") {
@@ -86,17 +87,6 @@ async function recentFilings(ticker: string) {
   return out;
 }
 
-async function exaSearch(query: string, n = 5) {
-  const key = await exaKey();
-  const r = await fetch("https://api.exa.ai/search", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": key },
-    body: JSON.stringify({ query, numResults: n, type: "neural", contents: { text: { maxCharacters: 1200 } } }),
-  });
-  const j = await r.json();
-  return (j.results || []).map((x: any) => ({ title: x.title, url: x.url, text: x.text || "" }));
-}
-
 export const handler = async (event: any) => {
   const body = JSON.parse(event.body || "{}");
   const reportId: string = body.reportId;
@@ -104,6 +94,7 @@ export const handler = async (event: any) => {
   if (!reportId || !query) return { statusCode: 400, body: "missing fields" };
 
   try {
+    await bootstrapExaFallback();
     await patchReport(reportId, { status: "running", query, updated_at: new Date().toISOString() });
     await emit(reportId, "plan", { msg: "Planning..." }, "running");
 
