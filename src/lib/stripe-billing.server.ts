@@ -1,7 +1,4 @@
-// Stripe Checkout — Airbyte Agent CLI primary, direct Stripe API fallback.
-// Webhook verification stays in src/routes/api/public/stripe-webhook.ts.
-
-import { airbyteCliConfigured, airbyteConnectorExecute, unwrapConnectorData } from "./airbyte-cli.server";
+// Stripe Checkout — direct Stripe API (not Airbyte). Webhook stays in stripe-webhook.ts.
 
 export interface CheckoutSessionInput {
   userId: string;
@@ -14,39 +11,6 @@ export interface CheckoutSessionInput {
 export interface CheckoutSessionResult {
   url: string;
   id?: string;
-}
-
-async function stripeCheckoutViaCli(input: CheckoutSessionInput): Promise<CheckoutSessionResult> {
-  const raw = await airbyteConnectorExecute({
-    name: "stripe",
-    entity: "checkout_sessions",
-    action: "create",
-    params: {
-      mode: "subscription",
-      success_url: `${input.returnUrl}?upgraded=1`,
-      cancel_url: input.returnUrl,
-      client_reference_id: input.userId,
-      customer_email: input.email || undefined,
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: "usd",
-            unit_amount: input.unitAmountCents,
-            recurring: { interval: "month" },
-            product_data: { name: input.productName },
-          },
-        },
-      ],
-      metadata: { user_id: input.userId },
-    },
-    select_fields: ["id", "url"],
-  });
-
-  const session = unwrapConnectorData<Record<string, unknown>>(raw);
-  const url = typeof session.url === "string" ? session.url : "";
-  if (!url) throw new Error("Stripe checkout session missing url from Airbyte CLI");
-  return { url, id: typeof session.id === "string" ? session.id : undefined };
 }
 
 async function stripeForm(path: string, params: Record<string, string>) {
@@ -68,7 +32,7 @@ async function stripeForm(path: string, params: Record<string, string>) {
   return res.json() as Promise<Record<string, unknown>>;
 }
 
-async function stripeCheckoutDirect(input: CheckoutSessionInput): Promise<CheckoutSessionResult> {
+export async function createCheckoutSession(input: CheckoutSessionInput): Promise<CheckoutSessionResult> {
   const session = await stripeForm("/checkout/sessions", {
     mode: "subscription",
     success_url: `${input.returnUrl}?upgraded=1`,
@@ -85,15 +49,4 @@ async function stripeCheckoutDirect(input: CheckoutSessionInput): Promise<Checko
   const url = typeof session.url === "string" ? session.url : "";
   if (!url) throw new Error("Stripe checkout session missing url");
   return { url, id: typeof session.id === "string" ? session.id : undefined };
-}
-
-export async function createCheckoutSession(input: CheckoutSessionInput): Promise<CheckoutSessionResult> {
-  if (airbyteCliConfigured()) {
-    try {
-      return await stripeCheckoutViaCli(input);
-    } catch (err) {
-      console.warn("[stripe] Airbyte CLI checkout failed; falling back to STRIPE_SECRET_KEY:", err);
-    }
-  }
-  return stripeCheckoutDirect(input);
 }
