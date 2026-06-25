@@ -11,7 +11,7 @@ Live Diligence is an agentic research workspace for retail and emerging-manager 
 
 1. **Plans** — decomposes the prompt into a ticker + sub-questions.
 2. **Reads filings** — pulls the latest 10-K / 10-Q / 8-Ks directly from **SEC EDGAR**.
-3. **Scans the live web** — uses **Exa** for current news, expert posts, competitor signals.
+3. **Scans the live web** — uses **Exa** (via Airbyte CLI) for current news, expert posts, competitor signals.
 4. **Synthesizes** — a reasoning model writes a cited markdown memo: Thesis · Financials · Risks · Catalysts · Sources.
 
 Free users get 3 memos/month; **Pro is $19/mo via Stripe** for unlimited memos and a stronger synthesis model.
@@ -44,8 +44,8 @@ Free users get 3 memos/month; **Pro is $19/mo via Stripe** for unlimited memos a
                     └──┬─────┬───────┬─────┘
                        │     │       │
               ┌────────▼─┐ ┌─▼────┐ ┌▼───────────────┐
-              │ Planner  │ │ SEC  │ │ Exa /search    │
-              │ Gemini   │ │ EDGAR│ │ + /contents    │
+              │ Planner  │ │ SEC  │ │ Exa (Airbyte   │
+              │ Gemini   │ │ EDGAR│ │ CLI)           │
               └────┬─────┘ └──┬───┘ └──┬─────────────┘
                    └──────────┴────────┘
                               │
@@ -63,7 +63,7 @@ Live status streams to the UI via `report_events` rows the agent emits per step.
 - **Backend**: TanStack server functions + public server routes (`/api/public/*`).
 - **Data**: Supabase (Postgres + Auth + RLS) — managed via Lovable Cloud.
 - **AI Gateway**: Lovable AI Gateway → Google Gemini 2.5 Flash / Pro.
-- **Web retrieval**: Exa (`/search`) with `contents.text` enabled.
+- **Web retrieval**: Exa via Airbyte Agent CLI (`search_results.list`); `EXA_API_KEY` fallback.
 - **Filings**: SEC EDGAR JSON submissions API (no key, just User-Agent).
 - **Payments**: Stripe REST (Checkout Sessions + webhook).
 - **Alt deployment**: AWS CDK stack scaffolded under `aws/` (Lambda + API Gateway + Bedrock).
@@ -74,6 +74,13 @@ Live status streams to the UI via `report_events` rows the agent emits per step.
 - Production: _add after publish_
 
 Stripe is in test mode — use card `4242 4242 4242 4242` with any future expiry & CVC.
+
+## Repositories
+
+| Mirror | URL |
+| --- | --- |
+| **GitHub** | https://github.com/icohangar-ops/Live-Diligence |
+| **Codeberg** | https://codeberg.org/cubiczan/live-diligence |
 
 ## Local development
 
@@ -89,13 +96,24 @@ Runtime (read inside server functions only):
 | Name | Source | Purpose |
 | --- | --- | --- |
 | `LOVABLE_API_KEY` | auto-provisioned | Lovable AI Gateway (Gemini) |
-| `EXA_API_KEY` | dashboard.exa.ai | Live web search |
-| `STRIPE_SECRET_KEY` | Stripe → API keys | Checkout sessions |
+| `AIRBYTE_CLIENT_ID`, `AIRBYTE_CLIENT_SECRET`, `AIRBYTE_ORGANIZATION_ID` | app.airbyte.ai | Exa web search via `airbyte-agent` CLI |
+| `AIRBYTE_WORKSPACE` | default | Airbyte workspace name (usually `default`) |
+| `AIRBYTE_USE_CLI` | `true` | Route Exa through Airbyte CLI |
+| `EXA_API_KEY` | dashboard.exa.ai | Fallback if Airbyte CLI unavailable |
+| `STRIPE_SECRET_KEY` | Stripe → API keys | Checkout sessions (direct API) |
 | `STRIPE_WEBHOOK_SECRET` | Stripe → Webhooks | Signature verification |
 | `AGENT_RUNNER_SECRET` | self-generated | Shared secret for the internal kickoff route |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PUBLISHABLE_KEY` | Lovable Cloud | DB/auth |
 
 Client (`VITE_*`): `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`.
+
+### Airbyte (Exa connector)
+
+```bash
+bash scripts/setup-airbyte-connectors.sh
+```
+
+Requires `airbyte-agent` on `PATH` and `AIRBYTE_*` creds in `.env`. See `.env.example`.
 
 ## AWS deployment path
 
